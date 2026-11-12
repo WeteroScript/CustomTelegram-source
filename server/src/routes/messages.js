@@ -164,19 +164,31 @@ router.post('/:id/forward', async (req, res) => {
   res.json(rows[0]);
 });
 
+// Редактирование текстового сообщения. Итог рассылается всем участникам.
 router.patch('/:id', async (req, res) => {
   const { rows } = await query(
     `UPDATE messages SET text = $2, edited = TRUE
      WHERE id = $1 AND sender_id = $3 AND deleted = FALSE AND kind = 'text' RETURNING *`,
     [req.params.id, req.body.text, req.user.id]
   );
+  if (!rows[0]) return res.status(404).json({ error: 'not_found' });
+  await broadcastToChat(rows[0].chat_id, {
+    type: 'message_edited', chatId: rows[0].chat_id, id: rows[0].id, text: rows[0].text
+  });
   res.json(rows[0]);
 });
 
-// При удалении сообщения с файлом файл тоже удаляется с диска.
+// Удаление своего сообщения, включая отметку файла удалённым.
 router.delete('/:id', async (req, res) => {
-  await query('UPDATE messages SET deleted = TRUE WHERE id = $1 AND sender_id = $2',
-    [req.params.id, req.user.id]);
+  const { rows } = await query(
+    `UPDATE messages SET deleted = TRUE
+     WHERE id = $1 AND sender_id = $2 AND deleted = FALSE RETURNING id, chat_id`,
+    [req.params.id, req.user.id]
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'not_found' });
+  await broadcastToChat(rows[0].chat_id, {
+    type: 'message_deleted', chatId: rows[0].chat_id, id: rows[0].id
+  });
   res.json({ ok: true });
 });
 

@@ -64,6 +64,10 @@ export function initWs(server) {
             [data.chatId, userId, data.text]
           );
           await broadcastToChat(data.chatId, { type: 'message', chatId: data.chatId, message: rows[0] });
+        } else if (data.type === 'typing' && data.chatId) {
+          // Индикатор набора: транслируем участникам, проверив membership.
+          if (!(await isMember(userId, data.chatId))) return;
+          await broadcastToChat(data.chatId, { type: 'typing', chatId: data.chatId, userId });
         }
       } catch (e) {
         console.error('ws message error:', e.message);

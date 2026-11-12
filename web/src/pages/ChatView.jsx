@@ -16,6 +16,23 @@ function fmtSize(bytes) {
   return `${(bytes / 1048576).toFixed(1)} МБ`;
 }
 
+// Короткий звук нового сообщения через WebAudio, без внешних файлов.
+function playBeep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.25);
+    osc.onended = () => ctx.close();
+  } catch {}
+}
+
 export default function ChatView({ user }) {
   const { id } = useParams();
   const [messages, setMessages] = useState([]);
@@ -23,10 +40,12 @@ export default function ChatView({ user }) {
   const [scheduled, setScheduled] = useState([]);
   const [chatInfo, setChatInfo] = useState(null);
   const [onlineIds, setOnlineIds] = useState({});
+  const [typing, setTyping] = useState(false);
   const [text, setText] = useState('');
   const [search, setSearch] = useState('');
   const [pickerFor, setPickerFor] = useState(null);
   const [replyTo, setReplyTo] = useState(null);
+  const [editing, setEditing] = useState(null); // { id, text }
   const [forwardFor, setForwardFor] = useState(null);
   const [forwardTarget, setForwardTarget] = useState('');
   const [selfDestruct, setSelfDestruct] = useState('');
@@ -36,6 +55,8 @@ export default function ChatView({ user }) {
   const wsRef = useRef(null);
   const bottomRef = useRef(null);
   const fileInputRef = useRef(null);
+  const typingSentAt = useRef(0);
+  const typingTimer = useRef(null);
 
   const load = () => api(`/messages/${id}`).then(setMessages).catch(() => setMessages([]));
   const loadPinned = () => api(`/messages/${id}/pinned`).then(setPinned).catch(() => setPinned([]));
@@ -43,6 +64,10 @@ export default function ChatView({ user }) {
   const markRead = () => api(`/chats/${id}/read`, { method: 'POST' }).catch(() => {});
 
   useEffect(() => {
+    // Запрашиваем право на браузерные уведомления один раз.
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
     load();
     loadPinned();
     loadScheduled();
@@ -65,18 +90,45 @@ export default function ChatView({ user }) {
           setMessages((prev) => prev.some((m) => m.id === msg.message.id)
             ? prev
             : [...prev, { ...msg.message, reactions: [] }]);
+          setTyping(false);
           markRead();
+          // Уведомление и звук, только когда вкладка не на переднем плане.
+          if (document.hidden) {
+            playBeep();
+            if ('Notification' in window && Notification.permission === 'granted') {
+              const title = msg.message.sender_id === user.id
+                ? 'Вы'
+                : `${msg.message.sender_first_name || ''} ${msg.message.sender_last_name || ''}`.trim() || 'Новое сообщение';
+              new Notification(title, {
+                body: String(msg.message.text || 'Вложение').slice(0, 80),
+                tag: `chat-${msg.chatId}`
+              });
+            }
+          }
         } else if (msg.type === 'reaction') {
           setMessages((prev) => prev.map((m) =>
             m.id === msg.messageId ? { ...m, reactions: msg.reactions } : m
           ));
+        } else if (msg.type === 'message_edited' && msg.chatId === Number(id)) {
+          setMessages((prev) => prev.map((m) =>
+            m.id === msg.id ? { ...m, text: msg.text, edited: true } : m
+          ));
+        } else if (msg.type === 'message_deleted' && msg.chatId === Number(id)) {
+          setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+        } else if (msg.type === 'typing' && msg.chatId === Number(id) && msg.userId !== user.id) {
+          setTyping(true);
+          clearTimeout(typingTimer.current);
+          typingTimer.current = setTimeout(() => setTyping(false), 3000);
         } else if (msg.type === 'presence') {
           setOnlineIds((prev) => ({ ...prev, [msg.userId]: msg.online }));
         }
       } catch {}
     };
     wsRef.current = ws;
-    return () => ws.close();
+    return () => {
+      ws.close();
+      clearTimeout(typingTimer.current);
+    };
   }, [id]);
 
   // Обновляем список отложенных: истёкшие уходят в чат сами.
@@ -103,7 +155,17 @@ export default function ChatView({ user }) {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, typing]);
+
+  // Сигнал набора не чаще раза в две секунды.
+  const onTextChanged = (value) => {
+    setText(value);
+    const now = Date.now();
+    if (value && !editing && now - typingSentAt.current > 2000 && wsRef.current?.readyState === 1) {
+      typingSentAt.current = now;
+      wsRef.current.send(JSON.stringify({ type: 'typing', chatId: Number(id) }));
+    }
+  };
 
   const send = async (e) => {
     e.preventDefault();
@@ -129,6 +191,39 @@ export default function ChatView({ user }) {
       }
     } catch {
       setNotice('Не удалось отправить сообщение');
+    }
+  };
+
+  const startEditing = (m) => {
+    setEditing({ id: m.id, text: m.text });
+    setReplyTo(null);
+  };
+
+  const saveEditing = async (e) => {
+    e.preventDefault();
+    if (!editing?.text?.trim()) return;
+    try {
+      await api(`/messages/${editing.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ text: editing.text })
+      });
+      // Обновление придёт по WebSocket, но применим и локально.
+      setMessages((prev) => prev.map((m) =>
+        m.id === editing.id ? { ...m, text: editing.text, edited: true } : m
+      ));
+      setEditing(null);
+    } catch {
+      setNotice('Не удалось изменить сообщение');
+    }
+  };
+
+  const removeMessage = async (messageId) => {
+    try {
+      await api(`/messages/${messageId}`, { method: 'DELETE' });
+      setMessages((prev) => prev.filter((m) => m.id !== messageId));
+      loadPinned();
+    } catch {
+      setNotice('Не удалось удалить сообщение');
     }
   };
 
@@ -300,6 +395,12 @@ export default function ChatView({ user }) {
               <button className="link small" onClick={() => setForwardFor(forwardFor === m.id ? null : m.id)}>→</button>
               <button className="link small" onClick={() => setPickerFor(pickerFor === m.id ? null : m.id)}>☺</button>
               <button className="link small" onClick={() => pin(m.id)}>{m.pinned ? '📌✕' : '📌'}</button>
+              {m.sender_id === user.id && m.kind === 'text' && (
+                <button className="link small" onClick={() => startEditing(m)}>✎</button>
+              )}
+              {m.sender_id === user.id && (
+                <button className="link small" onClick={() => removeMessage(m.id)}>🗑</button>
+              )}
             </div>
             {pickerFor === m.id && (
               <div className="emoji-picker">
@@ -316,6 +417,7 @@ export default function ChatView({ user }) {
             )}
           </div>
         ))}
+        {typing && <div className="typing-indicator muted small">печатает…</div>}
         <div ref={bottomRef} />
       </div>
       {notice && <div className="muted composer-notice">{notice}</div>}
@@ -326,32 +428,45 @@ export default function ChatView({ user }) {
           <button className="link small" onClick={() => setReplyTo(null)}>✕</button>
         </div>
       )}
-      <form className="composer" onSubmit={send}>
-        <input
-          ref={fileInputRef}
-          type="file"
-          hidden
-          onChange={onFilePicked}
-          accept="image/*,.pdf,.doc,.docx,.txt,.zip,.mp3,.mp4"
-        />
-        <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading}>📎</button>
-        <select value={scheduleIn} onChange={(e) => setScheduleIn(e.target.value)} title="Отложенная отправка">
-          <option value="">Сейчас</option>
-          <option value="60">Через 1 мин</option>
-          <option value="600">Через 10 мин</option>
-          <option value="3600">Через 1 ч</option>
-          <option value="86400">Через 1 день</option>
-        </select>
-        <select value={selfDestruct} onChange={(e) => setSelfDestruct(e.target.value)} title="Самоуничтожение">
-          <option value="">Без таймера</option>
-          <option value="10">10 сек</option>
-          <option value="60">1 мин</option>
-          <option value="300">5 мин</option>
-          <option value="3600">1 час</option>
-        </select>
-        <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Сообщение" />
-        <button>Отправить</button>
-      </form>
+      {editing ? (
+        <form className="composer editing" onSubmit={saveEditing}>
+          <span className="muted small">Редактирование</span>
+          <input
+            value={editing.text}
+            onChange={(e) => setEditing({ ...editing, text: e.target.value })}
+            autoFocus
+          />
+          <button>Сохранить</button>
+          <button type="button" className="cancel-btn" onClick={() => setEditing(null)}>Отмена</button>
+        </form>
+      ) : (
+        <form className="composer" onSubmit={send}>
+          <input
+            ref={fileInputRef}
+            type="file"
+            hidden
+            onChange={onFilePicked}
+            accept="image/*,.pdf,.doc,.docx,.txt,.zip,.mp3,.mp4"
+          />
+          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading}>📎</button>
+          <select value={scheduleIn} onChange={(e) => setScheduleIn(e.target.value)} title="Отложенная отправка">
+            <option value="">Сейчас</option>
+            <option value="60">Через 1 мин</option>
+            <option value="600">Через 10 мин</option>
+            <option value="3600">Через 1 ч</option>
+            <option value="86400">Через 1 день</option>
+          </select>
+          <select value={selfDestruct} onChange={(e) => setSelfDestruct(e.target.value)} title="Самоуничтожение">
+            <option value="">Без таймера</option>
+            <option value="10">10 сек</option>
+            <option value="60">1 мин</option>
+            <option value="300">5 мин</option>
+            <option value="3600">1 час</option>
+          </select>
+          <input value={text} onChange={(e) => onTextChanged(e.target.value)} placeholder="Сообщение" />
+          <button>Отправить</button>
+        </form>
+      )}
     </div>
   );
 }
