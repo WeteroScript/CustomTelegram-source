@@ -73,6 +73,19 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- Загруженные файлы: связь с сообщением и владельцем для учёта и очистки.
+CREATE TABLE IF NOT EXISTS media_files (
+  id BIGSERIAL PRIMARY KEY,
+  file_path TEXT NOT NULL,
+  thumb_path TEXT,
+  name TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  size BIGINT NOT NULL,
+  owner_id BIGINT NOT NULL REFERENCES users(id),
+  message_id BIGINT REFERENCES messages(id),
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS reactions (
   message_id BIGINT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
   user_id BIGINT NOT NULL REFERENCES users(id),

@@ -83,6 +83,21 @@ button.link { background: transparent; color: var(--accent); padding: 0; }
 .msg { background: var(--surface); border-radius: 10px; padding: 8px 12px; max-width: 70%; align-self: flex-start; }
 .msg.own { background: var(--surface-2); align-self: flex-end; }
 .msg-footer { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+.msg-image {
+  max-width: 100%;
+  max-height: 280px;
+  border-radius: 8px;
+  display: block;
+  margin-bottom: 4px;
+}
+.file-attachment {
+  display: inline-block;
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin-bottom: 4px;
+  color: var(--accent);
+}
 .reply-quote {
   border-left: 2px solid var(--accent);
   padding-left: 8px;
@@ -142,7 +157,7 @@ button.link { background: transparent; color: var(--accent); padding: 0; }
 .inline-form input { width: 120px; padding: 4px 8px; }
 .composer-notice { padding: 4px 24px; font-size: 13px; }
 .composer { display: flex; gap: 8px; padding: 16px 24px; border-top: 1px solid var(--surface-2); }
-.composer input { flex: 1; }
+.composer input:not([type="file"]) { flex: 1; }
 .gift img { width: 100%; height: 110px; object-fit: cover; border-radius: 8px; margin-bottom: 8px; background: var(--surface-2); }
 .admin-user { flex-wrap: wrap; align-items: center; }
 @media (max-width: 720px) {

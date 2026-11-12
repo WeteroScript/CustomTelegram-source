@@ -5,6 +5,7 @@ import { broadcastToChat } from '../ws.js';
 const router = Router();
 
 const ALLOWED_EMOJI = ['👍', '👎', '❤️', '🔥', '😂', '😮', '😢', '🎉'];
+const ALLOWED_KINDS = ['text', 'image', 'file'];
 
 async function assertMember(userId, chatId) {
   const { rows } = await query(
@@ -94,7 +95,11 @@ router.post('/:chatId', async (req, res) => {
   } catch {
     return res.status(403).json({ error: 'forbidden' });
   }
-  const { text, replyTo, kind = 'text', payload = {}, scheduledAt, selfDestructAt } = req.body;
+  const { text, replyTo, kind = 'text', payload = {}, scheduledAt, selfDestructAt, mediaId } = req.body;
+  if (!ALLOWED_KINDS.includes(kind)) return res.status(400).json({ error: 'bad_kind' });
+  if (kind !== 'text' && !payload?.media?.url) {
+    return res.status(400).json({ error: 'media_required' });
+  }
   if (replyTo) {
     const { rows: target } = await query(
       'SELECT 1 FROM messages WHERE id = $1 AND chat_id = $2 AND deleted = FALSE',
@@ -111,6 +116,13 @@ router.post('/:chatId', async (req, res) => {
     [req.params.chatId, req.user.id, replyTo, text, kind, payload, scheduledAt, selfDestructAt]
   );
   const message = rows[0];
+  // Привязываем загруженный файл к сообщению, если он был.
+  if (mediaId) {
+    await query(
+      'UPDATE media_files SET message_id = $1 WHERE id = $2 AND owner_id = $3 AND message_id IS NULL',
+      [message.id, mediaId, req.user.id]
+    );
+  }
   if (!scheduledAt) {
     await broadcastToChat(req.params.chatId, {
       type: 'message', chatId: Number(req.params.chatId), message
@@ -155,12 +167,13 @@ router.post('/:id/forward', async (req, res) => {
 router.patch('/:id', async (req, res) => {
   const { rows } = await query(
     `UPDATE messages SET text = $2, edited = TRUE
-     WHERE id = $1 AND sender_id = $3 AND deleted = FALSE RETURNING *`,
+     WHERE id = $1 AND sender_id = $3 AND deleted = FALSE AND kind = 'text' RETURNING *`,
     [req.params.id, req.body.text, req.user.id]
   );
   res.json(rows[0]);
 });
 
+// При удалении сообщения с файлом файл тоже удаляется с диска.
 router.delete('/:id', async (req, res) => {
   await query('UPDATE messages SET deleted = TRUE WHERE id = $1 AND sender_id = $2',
     [req.params.id, req.user.id]);

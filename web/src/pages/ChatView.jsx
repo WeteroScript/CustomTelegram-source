@@ -10,6 +10,12 @@ function fmtDelay(seconds) {
   return `через ${Math.floor(seconds / 3600)} ч`;
 }
 
+function fmtSize(bytes) {
+  if (bytes < 1024) return `${bytes} Б`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} КБ`;
+  return `${(bytes / 1048576).toFixed(1)} МБ`;
+}
+
 export default function ChatView({ user }) {
   const { id } = useParams();
   const [messages, setMessages] = useState([]);
@@ -26,8 +32,10 @@ export default function ChatView({ user }) {
   const [selfDestruct, setSelfDestruct] = useState('');
   const [scheduleIn, setScheduleIn] = useState('');
   const [notice, setNotice] = useState('');
+  const [uploading, setUploading] = useState(false);
   const wsRef = useRef(null);
   const bottomRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const load = () => api(`/messages/${id}`).then(setMessages).catch(() => setMessages([]));
   const loadPinned = () => api(`/messages/${id}/pinned`).then(setPinned).catch(() => setPinned([]));
@@ -121,6 +129,48 @@ export default function ChatView({ user }) {
       }
     } catch {
       setNotice('Не удалось отправить сообщение');
+    }
+  };
+
+  // Загрузка файла и отправка сообщения с медиа.
+  const onFilePicked = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setUploading(true);
+    setNotice('');
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/media', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${getToken()}` },
+        body: fd
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'upload_failed');
+      const now = Date.now();
+      await api(`/messages/${id}`, {
+        method: 'POST',
+        body: JSON.stringify({
+          text: text.trim() || null,
+          kind: data.kind,
+          payload: { media: data.media },
+          mediaId: data.id,
+          replyTo: replyTo?.id || undefined,
+          selfDestructAt: selfDestruct
+            ? new Date(now + Number(selfDestruct) * 1000).toISOString()
+            : undefined
+        })
+      });
+      setText('');
+      setReplyTo(null);
+    } catch (err) {
+      setNotice(err.message === 'limit_file_size'
+        ? 'Файл больше 10 МБ'
+        : 'Не удалось загрузить файл');
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -220,7 +270,18 @@ export default function ChatView({ user }) {
                 {m.reply_sender_name || '?'}: {String(m.reply_text).slice(0, 60)}
               </div>
             )}
-            <div>{m.text}</div>
+            {m.kind === 'image' && m.payload?.media && (
+              <a href={m.payload.media.url} target="_blank" rel="noreferrer">
+                <img className="msg-image" src={m.payload.media.thumb || m.payload.media.url} alt={m.payload.media.name} />
+              </a>
+            )}
+            {m.kind === 'file' && m.payload?.media && (
+              <a className="file-attachment" href={m.payload.media.url} target="_blank" rel="noreferrer">
+                📎 {m.payload.media.name}
+                <span className="muted small"> {fmtSize(m.payload.media.size)}</span>
+              </a>
+            )}
+            {m.text && <div>{m.text}</div>}
             {m.reactions?.length > 0 && (
               <div className="reactions">
                 {m.reactions.map((r) => (
@@ -258,13 +319,22 @@ export default function ChatView({ user }) {
         <div ref={bottomRef} />
       </div>
       {notice && <div className="muted composer-notice">{notice}</div>}
+      {uploading && <div className="muted composer-notice">Загрузка файла…</div>}
       {replyTo && (
         <div className="reply-bar">
-          Ответ на: {String(replyTo.text).slice(0, 50)}
+          Ответ на: {String(replyTo.text || 'вложение').slice(0, 50)}
           <button className="link small" onClick={() => setReplyTo(null)}>✕</button>
         </div>
       )}
       <form className="composer" onSubmit={send}>
+        <input
+          ref={fileInputRef}
+          type="file"
+          hidden
+          onChange={onFilePicked}
+          accept="image/*,.pdf,.doc,.docx,.txt,.zip,.mp3,.mp4"
+        />
+        <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading}>📎</button>
         <select value={scheduleIn} onChange={(e) => setScheduleIn(e.target.value)} title="Отложенная отправка">
           <option value="">Сейчас</option>
           <option value="60">Через 1 мин</option>
