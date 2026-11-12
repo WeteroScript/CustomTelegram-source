@@ -24,6 +24,7 @@ router.get('/:chatId', async (req, res) => {
     'UPDATE messages SET deleted = TRUE WHERE chat_id = $1 AND self_destruct_at IS NOT NULL AND self_destruct_at < now()',
     [req.params.chatId]
   );
+  const q = (req.query.q || '').toString().trim();
   const { rows } = await query(
     `SELECT m.*, u.first_name AS sender_first_name, u.last_name AS sender_last_name,
        r.text AS reply_text, ru.first_name AS reply_sender_name
@@ -33,8 +34,9 @@ router.get('/:chatId', async (req, res) => {
      LEFT JOIN users ru ON ru.id = r.sender_id
      WHERE m.chat_id = $1 AND m.deleted = FALSE
        AND (m.scheduled_at IS NULL OR m.scheduled_at <= now())
+       AND ($2::text = '' OR m.text ILIKE '%' || $2 || '%')
      ORDER BY m.id DESC LIMIT 100`,
-    [req.params.chatId]
+    [req.params.chatId, q]
   );
   const ids = rows.map((r) => r.id);
   let reactions = [];
@@ -49,6 +51,23 @@ router.get('/:chatId', async (req, res) => {
     ...m,
     reactions: reactions.filter((r) => r.message_id === m.id)
   })));
+});
+
+// Закреплённые сообщения чата.
+router.get('/:chatId/pinned', async (req, res) => {
+  try {
+    await assertMember(req.user.id, req.params.chatId);
+  } catch {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const { rows } = await query(
+    `SELECT m.*, u.first_name AS sender_first_name, u.last_name AS sender_last_name
+     FROM messages m LEFT JOIN users u ON u.id = m.sender_id
+     WHERE m.chat_id = $1 AND m.deleted = FALSE AND m.pinned = TRUE
+     ORDER BY m.id DESC`,
+    [req.params.chatId]
+  );
+  res.json(rows);
 });
 
 router.post('/:chatId', async (req, res) => {
@@ -107,6 +126,25 @@ router.delete('/:id', async (req, res) => {
   await query('UPDATE messages SET deleted = TRUE WHERE id = $1 AND sender_id = $2',
     [req.params.id, req.user.id]);
   res.json({ ok: true });
+});
+
+// Закрепить или открепить сообщение. Право есть у владельца, админа и автора.
+router.post('/:id/pin', async (req, res) => {
+  const { rows: msg } = await query(
+    `SELECT m.chat_id, cm.role, m.sender_id
+     FROM messages m
+     JOIN chat_members cm ON cm.chat_id = m.chat_id AND cm.user_id = $2
+     WHERE m.id = $1 AND m.deleted = FALSE`,
+    [req.params.id, req.user.id]
+  );
+  if (!msg[0]) return res.status(404).json({ error: 'not_found' });
+  const canPin = ['owner', 'admin'].includes(msg[0].role) || msg[0].sender_id === req.user.id;
+  if (!canPin) return res.status(403).json({ error: 'forbidden' });
+  const { rows } = await query(
+    'UPDATE messages SET pinned = NOT pinned WHERE id = $1 RETURNING id, pinned',
+    [req.params.id]
+  );
+  res.json(rows[0]);
 });
 
 // Переключение реакции: повторное нажатие убирает её.

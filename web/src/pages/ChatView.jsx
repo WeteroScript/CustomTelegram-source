@@ -7,8 +7,10 @@ const EMOJI = ['👍', '❤️', '🔥', '😂', '🎉'];
 export default function ChatView({ user }) {
   const { id } = useParams();
   const [messages, setMessages] = useState([]);
+  const [pinned, setPinned] = useState([]);
   const [chatInfo, setChatInfo] = useState(null);
   const [text, setText] = useState('');
+  const [search, setSearch] = useState('');
   const [pickerFor, setPickerFor] = useState(null);
   const [replyTo, setReplyTo] = useState(null);
   const [forwardFor, setForwardFor] = useState(null);
@@ -19,9 +21,11 @@ export default function ChatView({ user }) {
   const bottomRef = useRef(null);
 
   const load = () => api(`/messages/${id}`).then(setMessages).catch(() => setMessages([]));
+  const loadPinned = () => api(`/messages/${id}/pinned`).then(setPinned).catch(() => setPinned([]));
 
   useEffect(() => {
     load();
+    loadPinned();
     api(`/chats/${id}/info`).then(setChatInfo).catch(() => {});
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/ws?token=${getToken()}`);
@@ -36,6 +40,12 @@ export default function ChatView({ user }) {
     wsRef.current = ws;
     return () => ws.close();
   }, [id]);
+
+  const doSearch = (e) => {
+    e.preventDefault();
+    if (search.trim()) api(`/messages/${id}?q=${encodeURIComponent(search.trim())}`).then(setMessages).catch(() => {});
+    else load();
+  };
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -72,6 +82,16 @@ export default function ChatView({ user }) {
     } catch {}
   };
 
+  const pin = async (messageId) => {
+    try {
+      await api(`/messages/${messageId}/pin`, { method: 'POST' });
+      load();
+      loadPinned();
+    } catch {
+      setNotice('Нет прав на закрепление');
+    }
+  };
+
   const forward = async (e) => {
     e.preventDefault();
     setNotice('');
@@ -99,7 +119,17 @@ export default function ChatView({ user }) {
         {chatInfo?.peer && (
           <span className="muted small">@{chatInfo.peer.username || chatInfo.peer.digital_id}</span>
         )}
+        <form className="row chat-search" onSubmit={doSearch}>
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Поиск по чату" />
+          <button>Найти</button>
+        </form>
       </header>
+      {pinned.length > 0 && (
+        <div className="pinned-bar">
+          📌 {String(pinned[0].text).slice(0, 60)}
+          {pinned.length > 1 && <span className="muted small"> (+{pinned.length - 1})</span>}
+        </div>
+      )}
       <div className="messages">
         {messages.map((m) => (
           <div key={m.id} className={m.sender_id === user.id ? 'msg own' : 'msg'}>
@@ -130,6 +160,7 @@ export default function ChatView({ user }) {
               <button className="link small" onClick={() => setReplyTo(replyTo?.id === m.id ? null : m)}>↩</button>
               <button className="link small" onClick={() => setForwardFor(forwardFor === m.id ? null : m.id)}>→</button>
               <button className="link small" onClick={() => setPickerFor(pickerFor === m.id ? null : m.id)}>☺</button>
+              <button className="link small" onClick={() => pin(m.id)}>{m.pinned ? '📌✕' : '📌'}</button>
             </div>
             {pickerFor === m.id && (
               <div className="emoji-picker">
