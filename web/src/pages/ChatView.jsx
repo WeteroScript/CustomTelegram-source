@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, getToken } from '../api.js';
 
 export default function ChatView({ user }) {
   const { id } = useParams();
   const [messages, setMessages] = useState([]);
+  const [chatInfo, setChatInfo] = useState(null);
   const [text, setText] = useState('');
   const wsRef = useRef(null);
   const bottomRef = useRef(null);
@@ -13,6 +14,7 @@ export default function ChatView({ user }) {
 
   useEffect(() => {
     load();
+    api(`/chats/${id}/info`).then(setChatInfo).catch(() => {});
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/ws?token=${getToken()}`);
     ws.onmessage = (ev) => {
@@ -42,13 +44,14 @@ export default function ChatView({ user }) {
     } catch {}
   };
 
-  const title = useMemo(() => `Чат ${id}`, [id]);
-
   return (
     <div className="chat-page">
       <header className="chat-header">
         <Link to="/chats">←</Link>
-        <h3>{title}</h3>
+        <h3>{chatInfo?.title || `Чат ${id}`}</h3>
+        {chatInfo?.peer && (
+          <span className="muted small">@{chatInfo.peer.username || chatInfo.peer.digital_id}</span>
+        )}
       </header>
       <div className="messages">
         {messages.map((m) => (
