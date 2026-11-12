@@ -55,6 +55,35 @@ router.get('/:chatId', async (req, res) => {
   })));
 });
 
+// Выгрузка полной истории чата в текстовый файл.
+router.get('/:chatId/export', async (req, res) => {
+  try {
+    await assertMember(req.user.id, req.params.chatId);
+  } catch {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const { rows: chats } = await query('SELECT title, type FROM chats WHERE id = $1', [req.params.chatId]);
+  const { rows } = await query(
+    `SELECT m.*, u.first_name AS sender_first_name, u.last_name AS sender_last_name
+     FROM messages m LEFT JOIN users u ON u.id = m.sender_id
+     WHERE m.chat_id = $1 AND m.deleted = FALSE
+       AND (m.scheduled_at IS NULL OR m.scheduled_at <= now())
+     ORDER BY m.id ASC`,
+    [req.params.chatId]
+  );
+  const header = `История чата ${chats[0]?.title || 'Чат ' + req.params.chatId}\n` +
+    `Экспортирован: ${new Date().toLocaleString('ru')}\nСообщений: ${rows.length}\n\n`;
+  const body = rows.map((m) => {
+    const who = [m.sender_first_name, m.sender_last_name].filter(Boolean).join(' ') || 'Пользователь';
+    const when = new Date(m.created_at).toLocaleString('ru');
+    const attach = m.kind === 'image' ? ' [изображение]' : m.kind === 'file' ? ' [файл]' : '';
+    return `[${when}] ${who}:${attach} ${m.text || ''}`;
+  }).join('\n');
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="chat-${req.params.chatId}.txt"`);
+  res.send(header + body);
+});
+
 // Свои отложенные сообщения чата, ещё не наступило время отправки.
 router.get('/:chatId/scheduled', async (req, res) => {
   try {

@@ -18,6 +18,13 @@ export default function Chats({ user, onLogout }) {
     return () => clearInterval(t);
   }, []);
 
+  // Счётчик непрочитанных в заголовке вкладки браузера.
+  useEffect(() => {
+    const total = chats.reduce((sum, c) => sum + (c.unread || 0), 0);
+    document.title = total > 0 ? `(${total}) CustomTelegram` : 'CustomTelegram';
+    return () => { document.title = 'CustomTelegram'; };
+  }, [chats]);
+
   const createGroup = async (e) => {
     e.preventDefault();
     if (!title.trim()) return;

@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { api, getToken } from '../api.js';
 
 const EMOJI = ['👍', '❤️', '🔥', '😂', '🎉'];
+const ROLE_LABELS = { owner: 'владелец', admin: 'админ', member: 'участник', restricted: 'ограничен' };
 
 function fmtDelay(seconds) {
   if (seconds < 60) return `через ${seconds} сек`;
@@ -52,6 +53,9 @@ export default function ChatView({ user }) {
   const [scheduleIn, setScheduleIn] = useState('');
   const [notice, setNotice] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [showMembers, setShowMembers] = useState(false);
+  const [members, setMembers] = useState([]);
+  const [addUserId, setAddUserId] = useState('');
   const wsRef = useRef(null);
   const bottomRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -62,6 +66,7 @@ export default function ChatView({ user }) {
   const loadPinned = () => api(`/messages/${id}/pinned`).then(setPinned).catch(() => setPinned([]));
   const loadScheduled = () => api(`/messages/${id}/scheduled`).then(setScheduled).catch(() => setScheduled([]));
   const markRead = () => api(`/chats/${id}/read`, { method: 'POST' }).catch(() => {});
+  const loadMembers = () => api(`/chats/${id}/members`).then(setMembers).catch(() => setMembers([]));
 
   useEffect(() => {
     // Запрашиваем право на браузерные уведомления один раз.
@@ -315,6 +320,72 @@ export default function ChatView({ user }) {
     }
   };
 
+  // Выгрузка истории чата: файл приходит с сервера как вложение.
+  const exportHistory = async () => {
+    try {
+      const res = await fetch(`/api/messages/${id}/export`, {
+        headers: { Authorization: `Bearer ${getToken()}` }
+      });
+      if (!res.ok) throw new Error();
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `chat-${id}.txt`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setNotice('Не удалось выгрузить историю');
+    }
+  };
+
+  const openMembers = () => {
+    setShowMembers(!showMembers);
+    if (!showMembers) loadMembers();
+  };
+
+  const changeRole = async (userId, role) => {
+    setNotice('');
+    try {
+      await api(`/chats/${id}/members/${userId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ role })
+      });
+      loadMembers();
+    } catch {
+      setNotice('Не удалось изменить роль');
+    }
+  };
+
+  const kickMember = async (userId) => {
+    setNotice('');
+    try {
+      await api(`/chats/${id}/members/${userId}`, { method: 'DELETE' });
+      loadMembers();
+    } catch {
+      setNotice('Не удалось исключить участника');
+    }
+  };
+
+  const addMember = async (e) => {
+    e.preventDefault();
+    setNotice('');
+    if (!addUserId.trim()) return;
+    try {
+      const found = await api(`/users/${addUserId.trim()}`);
+      await api(`/chats/${id}/members`, {
+        method: 'POST',
+        body: JSON.stringify({ userId: found.id })
+      });
+      setAddUserId('');
+      loadMembers();
+    } catch {
+      setNotice('Пользователь не найден или нет прав');
+    }
+  };
+
+  const myRole = members.find((m) => m.id === user.id)?.role || chatInfo?.role || 'member';
+  const canManage = ['owner', 'admin'].includes(myRole);
   const senderName = (m) =>
     [m.sender_first_name, m.sender_last_name].filter(Boolean).join(' ') || 'Пользователь';
 
@@ -331,11 +402,62 @@ export default function ChatView({ user }) {
             {peerOnline ? 'в сети' : 'не в сети'}
           </span>
         )}
+        {chatInfo?.type === 'group' && (
+          <button className="link small" onClick={openMembers}>
+            👥 {showMembers ? 'Скрыть участников' : 'Участники'}
+          </button>
+        )}
+        <button className="link small" onClick={exportHistory}>⬇ История</button>
         <form className="row chat-search" onSubmit={doSearch}>
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Поиск по чату" />
           <button>Найти</button>
         </form>
       </header>
+      {showMembers && chatInfo?.type === 'group' && (
+        <div className="members-panel">
+          <div className="muted small">Ваша роль: {ROLE_LABELS[myRole] || myRole}</div>
+          {canManage && (
+            <form className="row" onSubmit={addMember}>
+              <input value={addUserId} onChange={(e) => setAddUserId(e.target.value)} placeholder="Цифровой ID для добавления" />
+              <button>Добавить</button>
+            </form>
+          )}
+          <ul className="list">
+            {members.map((u) => (
+              <li key={u.id}>
+                <div>
+                  <strong>{u.first_name} {u.last_name}</strong>
+                  <div className="muted small">
+                    <span className={u.online ? 'online-dot' : 'offline-dot'} />
+                    @{u.username || u.digital_id} · {ROLE_LABELS[u.role] || u.role}
+                  </div>
+                </div>
+                {canManage && u.id !== user.id && u.role !== 'owner' && (
+                  <div className="row member-controls">
+                    <select
+                      value={u.role}
+                      onChange={(e) => changeRole(u.id, e.target.value)}
+                      disabled={myRole === 'admin' && u.role === 'admin'}
+                    >
+                      <option value="admin">админ</option>
+                      <option value="member">участник</option>
+                      <option value="restricted">ограничен</option>
+                    </select>
+                    <button
+                      className="cancel-btn"
+                      onClick={() => kickMember(u.id)}
+                      disabled={myRole === 'admin' && u.role === 'admin'}
+                    >
+                      Исключить
+                    </button>
+                  </div>
+                )}
+              </li>
+            ))}
+            {members.length === 0 && <li className="muted">Список загружается…</li>}
+          </ul>
+        </div>
+      )}
       {pinned.length > 0 && (
         <div className="pinned-bar">
           📌 {String(pinned[0].text).slice(0, 60)}

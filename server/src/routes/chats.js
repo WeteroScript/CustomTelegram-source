@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { query, pool } from '../db/index.js';
+import { isOnline } from '../ws.js';
 
 const router = Router();
 
@@ -85,10 +86,93 @@ router.post('/private', async (req, res) => {
 });
 
 router.post('/:id/members', async (req, res) => {
+  // Добавлять участников могут владелец и админ группы.
+  const { rows: me } = await query(
+    'SELECT role FROM chat_members WHERE chat_id = $1 AND user_id = $2',
+    [req.params.id, req.user.id]
+  );
+  if (!me[0] || !['owner', 'admin'].includes(me[0].role)) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
   await query(
     `INSERT INTO chat_members (chat_id, user_id, role) VALUES ($1,$2,'member')
      ON CONFLICT DO NOTHING`,
     [req.params.id, req.body.userId]
+  );
+  res.json({ ok: true });
+});
+
+// Список участников с ролями и онлайн-статусами.
+router.get('/:id/members', async (req, res) => {
+  const { rows: me } = await query(
+    'SELECT 1 FROM chat_members WHERE chat_id = $1 AND user_id = $2',
+    [req.params.id, req.user.id]
+  );
+  if (!me[0]) return res.status(403).json({ error: 'forbidden' });
+  const { rows } = await query(
+    `SELECT u.id, u.first_name, u.last_name, u.username, u.digital_id, cm.role, cm.joined_at
+     FROM chat_members cm JOIN users u ON u.id = cm.user_id
+     WHERE cm.chat_id = $1
+     ORDER BY CASE cm.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, u.id`,
+    [req.params.id]
+  );
+  res.json(rows.map((u) => ({ ...u, online: isOnline(u.id) })));
+});
+
+// Смена роли участника. Доступно владельцу и админам, роль владельца изменить нельзя.
+router.patch('/:id/members/:userId', async (req, res) => {
+  const { role } = req.body;
+  if (!['admin', 'member', 'restricted'].includes(role)) {
+    return res.status(400).json({ error: 'bad_role' });
+  }
+  const { rows: me } = await query(
+    'SELECT role FROM chat_members WHERE chat_id = $1 AND user_id = $2',
+    [req.params.id, req.user.id]
+  );
+  if (!me[0] || !['owner', 'admin'].includes(me[0].role)) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const { rows: target } = await query(
+    'SELECT role FROM chat_members WHERE chat_id = $1 AND user_id = $2',
+    [req.params.id, req.params.userId]
+  );
+  if (!target[0]) return res.status(404).json({ error: 'not_found' });
+  if (target[0].role === 'owner') return res.status(403).json({ error: 'cannot_change_owner' });
+  // Админ не может управлять другими админами, только владелец.
+  if (me[0].role === 'admin' && target[0].role === 'admin') {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  await query(
+    'UPDATE chat_members SET role = $1 WHERE chat_id = $2 AND user_id = $3',
+    [role, req.params.id, req.params.userId]
+  );
+  res.json({ ok: true });
+});
+
+// Исключение участника. Владельца исключить нельзя, админ не исключает админов.
+router.delete('/:id/members/:userId', async (req, res) => {
+  if (Number(req.params.userId) === req.user.id) {
+    return res.status(400).json({ error: 'cannot_kick_self' });
+  }
+  const { rows: me } = await query(
+    'SELECT role FROM chat_members WHERE chat_id = $1 AND user_id = $2',
+    [req.params.id, req.user.id]
+  );
+  if (!me[0] || !['owner', 'admin'].includes(me[0].role)) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const { rows: target } = await query(
+    'SELECT role FROM chat_members WHERE chat_id = $1 AND user_id = $2',
+    [req.params.id, req.params.userId]
+  );
+  if (!target[0]) return res.status(404).json({ error: 'not_found' });
+  if (target[0].role === 'owner') return res.status(403).json({ error: 'cannot_kick_owner' });
+  if (me[0].role === 'admin' && target[0].role === 'admin') {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  await query(
+    'DELETE FROM chat_members WHERE chat_id = $1 AND user_id = $2',
+    [req.params.id, req.params.userId]
   );
   res.json({ ok: true });
 });
