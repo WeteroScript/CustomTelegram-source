@@ -10,6 +10,11 @@ export default function ChatView({ user }) {
   const [chatInfo, setChatInfo] = useState(null);
   const [text, setText] = useState('');
   const [pickerFor, setPickerFor] = useState(null);
+  const [replyTo, setReplyTo] = useState(null);
+  const [forwardFor, setForwardFor] = useState(null);
+  const [forwardTarget, setForwardTarget] = useState('');
+  const [selfDestruct, setSelfDestruct] = useState('');
+  const [notice, setNotice] = useState('');
   const wsRef = useRef(null);
   const bottomRef = useRef(null);
 
@@ -39,8 +44,15 @@ export default function ChatView({ user }) {
   const send = async (e) => {
     e.preventDefault();
     if (!text.trim()) return;
-    const body = { text };
+    const body = {
+      text,
+      replyTo: replyTo?.id || undefined,
+      selfDestructAt: selfDestruct
+        ? new Date(Date.now() + Number(selfDestruct) * 1000).toISOString()
+        : undefined
+    };
     setText('');
+    setReplyTo(null);
     try {
       const msg = await api(`/messages/${id}`, { method: 'POST', body: JSON.stringify(body) });
       setMessages((prev) => [...prev, { ...msg, reactions: [] }]);
@@ -58,6 +70,22 @@ export default function ChatView({ user }) {
         m.id === data.messageId ? { ...m, reactions: data.reactions } : m
       ));
     } catch {}
+  };
+
+  const forward = async (e) => {
+    e.preventDefault();
+    setNotice('');
+    try {
+      await api(`/messages/${forwardFor}/forward`, {
+        method: 'POST',
+        body: JSON.stringify({ toChatId: Number(forwardTarget) })
+      });
+      setNotice('Переслано в чат ' + forwardTarget);
+      setForwardFor(null);
+      setForwardTarget('');
+    } catch {
+      setNotice('Не удалось переслать: проверьте номер чата');
+    }
   };
 
   const senderName = (m) =>
@@ -78,6 +106,12 @@ export default function ChatView({ user }) {
             {chatInfo?.type !== 'private' && m.sender_id !== user.id && (
               <div className="muted small">{senderName(m)}</div>
             )}
+            {m.forwarded_from && <div className="muted small">Переслано</div>}
+            {m.reply_text !== undefined && m.reply_text !== null && (
+              <div className="reply-quote muted small">
+                {m.reply_sender_name || '?'}: {String(m.reply_text).slice(0, 60)}
+              </div>
+            )}
             <div>{m.text}</div>
             {m.reactions?.length > 0 && (
               <div className="reactions">
@@ -88,8 +122,13 @@ export default function ChatView({ user }) {
                 ))}
               </div>
             )}
+            {m.self_destruct_at && (
+              <div className="muted small">Исчезнет: {new Date(m.self_destruct_at).toLocaleTimeString()}</div>
+            )}
             <div className="msg-footer">
               <span className="muted small">{new Date(m.created_at).toLocaleTimeString()}{m.edited ? ' · изменено' : ''}</span>
+              <button className="link small" onClick={() => setReplyTo(replyTo?.id === m.id ? null : m)}>↩</button>
+              <button className="link small" onClick={() => setForwardFor(forwardFor === m.id ? null : m.id)}>→</button>
               <button className="link small" onClick={() => setPickerFor(pickerFor === m.id ? null : m.id)}>☺</button>
             </div>
             {pickerFor === m.id && (
@@ -99,11 +138,31 @@ export default function ChatView({ user }) {
                 ))}
               </div>
             )}
+            {forwardFor === m.id && (
+              <form className="inline-form" onSubmit={forward}>
+                <input value={forwardTarget} onChange={(e) => setForwardTarget(e.target.value)} placeholder="Номер чата" />
+                <button>Переслать</button>
+              </form>
+            )}
           </div>
         ))}
         <div ref={bottomRef} />
       </div>
+      {notice && <div className="muted composer-notice">{notice}</div>}
+      {replyTo && (
+        <div className="reply-bar">
+          Ответ на: {String(replyTo.text).slice(0, 50)}
+          <button className="link small" onClick={() => setReplyTo(null)}>✕</button>
+        </div>
+      )}
       <form className="composer" onSubmit={send}>
+        <select value={selfDestruct} onChange={(e) => setSelfDestruct(e.target.value)} title="Самоуничтожение">
+          <option value="">Без таймера</option>
+          <option value="10">10 сек</option>
+          <option value="60">1 мин</option>
+          <option value="300">5 мин</option>
+          <option value="3600">1 час</option>
+        </select>
         <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Сообщение" />
         <button>Отправить</button>
       </form>

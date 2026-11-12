@@ -71,6 +71,23 @@ button.link { background: transparent; color: var(--accent); padding: 0; }
 .msg { background: var(--surface); border-radius: 10px; padding: 8px 12px; max-width: 70%; align-self: flex-start; }
 .msg.own { background: var(--surface-2); align-self: flex-end; }
 .msg-footer { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+.reply-quote {
+  border-left: 2px solid var(--accent);
+  padding-left: 8px;
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reply-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 24px;
+  background: var(--surface);
+  font-size: 13px;
+  color: var(--muted);
+}
 .reactions { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
 .reaction-chip {
   background: var(--surface-2);
@@ -80,6 +97,9 @@ button.link { background: transparent; color: var(--accent); padding: 0; }
   font-weight: 400;
 }
 .emoji-picker { display: flex; gap: 4px; margin-top: 6px; }
+.inline-form { display: flex; gap: 6px; margin-top: 6px; }
+.inline-form input { width: 120px; padding: 4px 8px; }
+.composer-notice { padding: 4px 24px; font-size: 13px; }
 .composer { display: flex; gap: 8px; padding: 16px 24px; border-top: 1px solid var(--surface-2); }
 .composer input { flex: 1; }
 .gift img { width: 100%; height: 110px; object-fit: cover; border-radius: 8px; margin-bottom: 8px; background: var(--surface-2); }

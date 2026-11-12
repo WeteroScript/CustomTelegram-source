@@ -19,10 +19,20 @@ router.get('/:chatId', async (req, res) => {
   } catch {
     return res.status(403).json({ error: 'forbidden' });
   }
+  // Помечаем удалёнными просроченные самоуничтожающиеся сообщения чата.
+  await query(
+    'UPDATE messages SET deleted = TRUE WHERE chat_id = $1 AND self_destruct_at IS NOT NULL AND self_destruct_at < now()',
+    [req.params.chatId]
+  );
   const { rows } = await query(
-    `SELECT m.*, u.first_name AS sender_first_name, u.last_name AS sender_last_name
-     FROM messages m LEFT JOIN users u ON u.id = m.sender_id
+    `SELECT m.*, u.first_name AS sender_first_name, u.last_name AS sender_last_name,
+       r.text AS reply_text, ru.first_name AS reply_sender_name
+     FROM messages m
+     LEFT JOIN users u ON u.id = m.sender_id
+     LEFT JOIN messages r ON r.id = m.reply_to
+     LEFT JOIN users ru ON ru.id = r.sender_id
      WHERE m.chat_id = $1 AND m.deleted = FALSE
+       AND (m.scheduled_at IS NULL OR m.scheduled_at <= now())
      ORDER BY m.id DESC LIMIT 100`,
     [req.params.chatId]
   );
@@ -48,10 +58,38 @@ router.post('/:chatId', async (req, res) => {
     return res.status(403).json({ error: 'forbidden' });
   }
   const { text, replyTo, kind = 'text', payload = {}, scheduledAt, selfDestructAt } = req.body;
+  if (replyTo) {
+    const { rows: target } = await query(
+      'SELECT 1 FROM messages WHERE id = $1 AND chat_id = $2 AND deleted = FALSE',
+      [replyTo, req.params.chatId]
+    );
+    if (!target[0]) return res.status(400).json({ error: 'bad_reply_target' });
+  }
   const { rows } = await query(
     `INSERT INTO messages (chat_id, sender_id, reply_to, text, kind, payload, scheduled_at, self_destruct_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
     [req.params.chatId, req.user.id, replyTo, text, kind, payload, scheduledAt, selfDestructAt]
+  );
+  res.json(rows[0]);
+});
+
+// Пересылка сообщения в другой чат, где пользователь состоит.
+router.post('/:id/forward', async (req, res) => {
+  const { toChatId } = req.body;
+  const { rows: source } = await query(
+    'SELECT * FROM messages WHERE id = $1 AND deleted = FALSE', [req.params.id]
+  );
+  if (!source[0]) return res.status(404).json({ error: 'not_found' });
+  try {
+    await assertMember(req.user.id, toChatId);
+    await assertMember(req.user.id, source[0].chat_id);
+  } catch {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const { rows } = await query(
+    `INSERT INTO messages (chat_id, sender_id, forwarded_from, text, kind, payload)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+    [toChatId, req.user.id, source[0].sender_id, source[0].text, source[0].kind, source[0].payload]
   );
   res.json(rows[0]);
 });
