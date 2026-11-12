@@ -16,6 +16,7 @@ export default function ChatView({ user }) {
   const [pinned, setPinned] = useState([]);
   const [scheduled, setScheduled] = useState([]);
   const [chatInfo, setChatInfo] = useState(null);
+  const [onlineIds, setOnlineIds] = useState({});
   const [text, setText] = useState('');
   const [search, setSearch] = useState('');
   const [pickerFor, setPickerFor] = useState(null);
@@ -38,15 +39,31 @@ export default function ChatView({ user }) {
     loadPinned();
     loadScheduled();
     markRead();
-    api(`/chats/${id}/info`).then(setChatInfo).catch(() => {});
+    api(`/chats/${id}/info`).then((info) => {
+      setChatInfo(info);
+      if (info.peer?.id) {
+        api(`/users/online?ids=${info.peer.id}`).then((list) => {
+          setOnlineIds((prev) => ({ ...prev, [info.peer.id]: Boolean(list[0]?.online) }));
+        }).catch(() => {});
+      }
+    }).catch(() => {});
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/ws?token=${getToken()}`);
     ws.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data);
         if (msg.type === 'message' && msg.chatId === Number(id)) {
-          setMessages((prev) => [...prev, { ...msg.message, reactions: [] }]);
+          // Дубликаты отфильтровываются: сообщение могло прийти и по REST.
+          setMessages((prev) => prev.some((m) => m.id === msg.message.id)
+            ? prev
+            : [...prev, { ...msg.message, reactions: [] }]);
           markRead();
+        } else if (msg.type === 'reaction') {
+          setMessages((prev) => prev.map((m) =>
+            m.id === msg.messageId ? { ...m, reactions: msg.reactions } : m
+          ));
+        } else if (msg.type === 'presence') {
+          setOnlineIds((prev) => ({ ...prev, [msg.userId]: msg.online }));
         }
       } catch {}
     };
@@ -119,13 +136,11 @@ export default function ChatView({ user }) {
   const react = async (messageId, emoji) => {
     setPickerFor(null);
     try {
-      const data = await api(`/messages/${messageId}/react`, {
+      await api(`/messages/${messageId}/react`, {
         method: 'POST',
         body: JSON.stringify({ emoji })
       });
-      setMessages((prev) => prev.map((m) =>
-        m.id === data.messageId ? { ...m, reactions: data.reactions } : m
-      ));
+      // Итоговые реакции придут всем по WebSocket, локально ничего не меняем.
     } catch {}
   };
 
@@ -158,13 +173,18 @@ export default function ChatView({ user }) {
   const senderName = (m) =>
     [m.sender_first_name, m.sender_last_name].filter(Boolean).join(' ') || 'Пользователь';
 
+  const peerOnline = chatInfo?.peer ? Boolean(onlineIds[chatInfo.peer.id]) : false;
+
   return (
     <div className="chat-page">
       <header className="chat-header">
         <Link to="/chats">←</Link>
         <h3>{chatInfo?.title || `Чат ${id}`}</h3>
         {chatInfo?.peer && (
-          <span className="muted small">@{chatInfo.peer.username || chatInfo.peer.digital_id}</span>
+          <span className="muted small">
+            <span className={peerOnline ? 'online-dot' : 'offline-dot'} />
+            {peerOnline ? 'в сети' : 'не в сети'}
+          </span>
         )}
         <form className="row chat-search" onSubmit={doSearch}>
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Поиск по чату" />

@@ -126,7 +126,7 @@ router.get('/:id/info', async (req, res) => {
   if (!chat) return res.status(404).json({ error: 'not_found' });
   if (chat.type !== 'private') return res.json({ ...chat, title: chat.title || `Чат ${chat.id}` });
   const { rows: others } = await query(
-    `SELECT u.first_name, u.last_name, u.username, u.digital_id
+    `SELECT u.id, u.first_name, u.last_name, u.username, u.digital_id, u.status
      FROM chat_members cm JOIN users u ON u.id = cm.user_id
      WHERE cm.chat_id = $1 AND cm.user_id != $2`,
     [req.params.id, req.user.id]

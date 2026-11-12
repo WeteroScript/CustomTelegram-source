@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { query } from '../db/index.js';
+import { isOnline } from '../ws.js';
 
 const router = Router();
 
@@ -22,6 +23,12 @@ router.patch('/me', async (req, res) => {
     [req.user.id, username, firstName, lastName, bio, avatarUrl, language]
   );
   res.json(rows[0]);
+});
+
+// Онлайн-статусы пользователей по списку id через запятую.
+router.get('/online', async (req, res) => {
+  const ids = (req.query.ids || '').split(',').map(Number).filter(Boolean);
+  res.json(ids.map((id) => ({ id, online: isOnline(id) })));
 });
 
 router.get('/:digitalId', async (req, res) => {

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { query } from '../db/index.js';
+import { broadcastToChat } from '../ws.js';
 
 const router = Router();
 
@@ -109,7 +110,13 @@ router.post('/:chatId', async (req, res) => {
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
     [req.params.chatId, req.user.id, replyTo, text, kind, payload, scheduledAt, selfDestructAt]
   );
-  res.json(rows[0]);
+  const message = rows[0];
+  if (!scheduledAt) {
+    await broadcastToChat(req.params.chatId, {
+      type: 'message', chatId: Number(req.params.chatId), message
+    });
+  }
+  res.json(message);
 });
 
 // Отмена отложенного сообщения: доступна только автору.
@@ -141,6 +148,7 @@ router.post('/:id/forward', async (req, res) => {
      VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
     [toChatId, req.user.id, source[0].sender_id, source[0].text, source[0].kind, source[0].payload]
   );
+  await broadcastToChat(toChatId, { type: 'message', chatId: Number(toChatId), message: rows[0] });
   res.json(rows[0]);
 });
 
@@ -178,7 +186,7 @@ router.post('/:id/pin', async (req, res) => {
   res.json(rows[0]);
 });
 
-// Переключение реакции: повторное нажатие убирает её.
+// Переключение реакции: повторное нажатие убирает её. Итог рассылается всем участникам чата.
 router.post('/:id/react', async (req, res) => {
   const { emoji } = req.body;
   if (!ALLOWED_EMOJI.includes(emoji)) return res.status(400).json({ error: 'bad_emoji' });
@@ -204,6 +212,9 @@ router.post('/:id/react', async (req, res) => {
      WHERE message_id = $1 GROUP BY message_id, emoji`,
     [req.params.id]
   );
+  await broadcastToChat(msg[0].chat_id, {
+    type: 'reaction', messageId: Number(req.params.id), reactions: rows
+  });
   res.json({ messageId: Number(req.params.id), reactions: rows });
 });
 

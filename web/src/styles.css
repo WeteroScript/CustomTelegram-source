@@ -120,6 +120,15 @@ button.link { background: transparent; color: var(--accent); padding: 0; }
   font-size: 13px;
 }
 .scheduled-item { display: inline-flex; gap: 6px; align-items: center; }
+.online-dot, .offline-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+}
+.online-dot { background: var(--positive); }
+.offline-dot { background: var(--muted); }
 .reactions { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
 .reaction-chip {
   background: var(--surface-2);
