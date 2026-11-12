@@ -4,10 +4,17 @@ import { api, getToken } from '../api.js';
 
 const EMOJI = ['👍', '❤️', '🔥', '😂', '🎉'];
 
+function fmtDelay(seconds) {
+  if (seconds < 60) return `через ${seconds} сек`;
+  if (seconds < 3600) return `через ${Math.floor(seconds / 60)} мин`;
+  return `через ${Math.floor(seconds / 3600)} ч`;
+}
+
 export default function ChatView({ user }) {
   const { id } = useParams();
   const [messages, setMessages] = useState([]);
   const [pinned, setPinned] = useState([]);
+  const [scheduled, setScheduled] = useState([]);
   const [chatInfo, setChatInfo] = useState(null);
   const [text, setText] = useState('');
   const [search, setSearch] = useState('');
@@ -16,16 +23,19 @@ export default function ChatView({ user }) {
   const [forwardFor, setForwardFor] = useState(null);
   const [forwardTarget, setForwardTarget] = useState('');
   const [selfDestruct, setSelfDestruct] = useState('');
+  const [scheduleIn, setScheduleIn] = useState('');
   const [notice, setNotice] = useState('');
   const wsRef = useRef(null);
   const bottomRef = useRef(null);
 
   const load = () => api(`/messages/${id}`).then(setMessages).catch(() => setMessages([]));
   const loadPinned = () => api(`/messages/${id}/pinned`).then(setPinned).catch(() => setPinned([]));
+  const loadScheduled = () => api(`/messages/${id}/scheduled`).then(setScheduled).catch(() => setScheduled([]));
 
   useEffect(() => {
     load();
     loadPinned();
+    loadScheduled();
     api(`/chats/${id}/info`).then(setChatInfo).catch(() => {});
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/ws?token=${getToken()}`);
@@ -41,6 +51,22 @@ export default function ChatView({ user }) {
     return () => ws.close();
   }, [id]);
 
+  // Обновляем список отложенных: истёкшие уходят в чат сами.
+  useEffect(() => {
+    if (scheduled.length === 0) return;
+    const t = setInterval(() => {
+      const now = Date.now();
+      const remaining = scheduled.filter((s) => new Date(s.scheduled_at).getTime() > now);
+      if (remaining.length !== scheduled.length) {
+        loadScheduled();
+        load();
+      } else {
+        setScheduled(remaining);
+      }
+    }, 5000);
+    return () => clearInterval(t);
+  }, [scheduled]);
+
   const doSearch = (e) => {
     e.preventDefault();
     if (search.trim()) api(`/messages/${id}?q=${encodeURIComponent(search.trim())}`).then(setMessages).catch(() => {});
@@ -54,19 +80,37 @@ export default function ChatView({ user }) {
   const send = async (e) => {
     e.preventDefault();
     if (!text.trim()) return;
+    const now = Date.now();
     const body = {
       text,
       replyTo: replyTo?.id || undefined,
       selfDestructAt: selfDestruct
-        ? new Date(Date.now() + Number(selfDestruct) * 1000).toISOString()
+        ? new Date(now + Number(selfDestruct) * 1000).toISOString()
+        : undefined,
+      scheduledAt: scheduleIn
+        ? new Date(now + Number(scheduleIn) * 1000).toISOString()
         : undefined
     };
     setText('');
     setReplyTo(null);
     try {
-      const msg = await api(`/messages/${id}`, { method: 'POST', body: JSON.stringify(body) });
-      setMessages((prev) => [...prev, { ...msg, reactions: [] }]);
-    } catch {}
+      await api(`/messages/${id}`, { method: 'POST', body: JSON.stringify(body) });
+      if (scheduleIn) {
+        setNotice('Сообщение отложено');
+        loadScheduled();
+      }
+    } catch {
+      setNotice('Не удалось отправить сообщение');
+    }
+  };
+
+  const cancelScheduled = async (messageId) => {
+    try {
+      await api(`/messages/${messageId}/schedule`, { method: 'DELETE' });
+      loadScheduled();
+    } catch {
+      setNotice('Не удалось отменить');
+    }
   };
 
   const react = async (messageId, emoji) => {
@@ -130,6 +174,17 @@ export default function ChatView({ user }) {
           {pinned.length > 1 && <span className="muted small"> (+{pinned.length - 1})</span>}
         </div>
       )}
+      {scheduled.length > 0 && (
+        <div className="scheduled-bar">
+          <span className="muted small">Отложено: {scheduled.length}</span>
+          {scheduled.map((s) => (
+            <span key={s.id} className="scheduled-item">
+              «{String(s.text).slice(0, 25)}» {fmtDelay(Math.max(0, (new Date(s.scheduled_at) - Date.now()) / 1000))}
+              <button className="link small" onClick={() => cancelScheduled(s.id)}>✕</button>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="messages">
         {messages.map((m) => (
           <div key={m.id} className={m.sender_id === user.id ? 'msg own' : 'msg'}>
@@ -187,6 +242,13 @@ export default function ChatView({ user }) {
         </div>
       )}
       <form className="composer" onSubmit={send}>
+        <select value={scheduleIn} onChange={(e) => setScheduleIn(e.target.value)} title="Отложенная отправка">
+          <option value="">Сейчас</option>
+          <option value="60">Через 1 мин</option>
+          <option value="600">Через 10 мин</option>
+          <option value="3600">Через 1 ч</option>
+          <option value="86400">Через 1 день</option>
+        </select>
         <select value={selfDestruct} onChange={(e) => setSelfDestruct(e.target.value)} title="Самоуничтожение">
           <option value="">Без таймера</option>
           <option value="10">10 сек</option>

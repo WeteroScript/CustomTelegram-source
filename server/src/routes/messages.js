@@ -53,6 +53,23 @@ router.get('/:chatId', async (req, res) => {
   })));
 });
 
+// Свои отложенные сообщения чата, ещё не наступило время отправки.
+router.get('/:chatId/scheduled', async (req, res) => {
+  try {
+    await assertMember(req.user.id, req.params.chatId);
+  } catch {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const { rows } = await query(
+    `SELECT id, text, scheduled_at FROM messages
+     WHERE chat_id = $1 AND sender_id = $2 AND deleted = FALSE
+       AND scheduled_at IS NOT NULL AND scheduled_at > now()
+     ORDER BY scheduled_at ASC`,
+    [req.params.chatId, req.user.id]
+  );
+  res.json(rows);
+});
+
 // Закреплённые сообщения чата.
 router.get('/:chatId/pinned', async (req, res) => {
   try {
@@ -84,12 +101,26 @@ router.post('/:chatId', async (req, res) => {
     );
     if (!target[0]) return res.status(400).json({ error: 'bad_reply_target' });
   }
+  if (scheduledAt && new Date(scheduledAt) < new Date()) {
+    return res.status(400).json({ error: 'bad_schedule_time' });
+  }
   const { rows } = await query(
     `INSERT INTO messages (chat_id, sender_id, reply_to, text, kind, payload, scheduled_at, self_destruct_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
     [req.params.chatId, req.user.id, replyTo, text, kind, payload, scheduledAt, selfDestructAt]
   );
   res.json(rows[0]);
+});
+
+// Отмена отложенного сообщения: доступна только автору.
+router.delete('/:id/schedule', async (req, res) => {
+  const { rows } = await query(
+    `DELETE FROM messages
+     WHERE id = $1 AND sender_id = $2 AND scheduled_at IS NOT NULL AND scheduled_at > now()`,
+    [req.params.id, req.user.id]
+  );
+  if (rows.length === 0) return res.status(404).json({ error: 'not_found' });
+  res.json({ ok: true });
 });
 
 // Пересылка сообщения в другой чат, где пользователь состоит.
