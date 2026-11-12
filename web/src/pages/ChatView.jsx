@@ -31,11 +31,13 @@ export default function ChatView({ user }) {
   const load = () => api(`/messages/${id}`).then(setMessages).catch(() => setMessages([]));
   const loadPinned = () => api(`/messages/${id}/pinned`).then(setPinned).catch(() => setPinned([]));
   const loadScheduled = () => api(`/messages/${id}/scheduled`).then(setScheduled).catch(() => setScheduled([]));
+  const markRead = () => api(`/chats/${id}/read`, { method: 'POST' }).catch(() => {});
 
   useEffect(() => {
     load();
     loadPinned();
     loadScheduled();
+    markRead();
     api(`/chats/${id}/info`).then(setChatInfo).catch(() => {});
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/ws?token=${getToken()}`);
@@ -44,6 +46,7 @@ export default function ChatView({ user }) {
         const msg = JSON.parse(ev.data);
         if (msg.type === 'message' && msg.chatId === Number(id)) {
           setMessages((prev) => [...prev, { ...msg.message, reactions: [] }]);
+          markRead();
         }
       } catch {}
     };

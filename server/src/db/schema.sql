@@ -80,6 +80,14 @@ CREATE TABLE IF NOT EXISTS reactions (
   PRIMARY KEY (message_id, user_id, emoji)
 );
 
+-- Последнее прочитанное сообщение пользователя в каждом чате.
+CREATE TABLE IF NOT EXISTS message_reads (
+  chat_id BIGINT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  user_id BIGINT NOT NULL REFERENCES users(id),
+  last_read_message_id BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (chat_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS wallets (
   user_id BIGINT PRIMARY KEY REFERENCES users(id),
   grams NUMERIC DEFAULT 0,

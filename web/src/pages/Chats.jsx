@@ -12,7 +12,11 @@ export default function Chats({ user, onLogout }) {
 
   const load = () => api('/chats').then(setChats).catch(() => setChats([]));
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 10000);
+    return () => clearInterval(t);
+  }, []);
 
   const createGroup = async (e) => {
     e.preventDefault();
@@ -55,8 +59,11 @@ export default function Chats({ user, onLogout }) {
           <li key={c.id}>
             <Link to={`/chats/${c.id}`}>
               <strong>{c.title || `Чат ${c.id}`}</strong>
-              <span className="muted small">{c.type} · {c.role}</span>
+              <span className="muted small">{c.last_message ? String(c.last_message).slice(0, 40) : c.type}</span>
             </Link>
+            <span className="row">
+              {c.unread > 0 && <span className="badge">{c.unread}</span>}
+            </span>
           </li>
         ))}
         {chats.length === 0 && <li className="muted">Пока нет чатов</li>}

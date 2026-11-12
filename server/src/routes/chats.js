@@ -3,11 +3,25 @@ import { query, pool } from '../db/index.js';
 
 const router = Router();
 
+// Список чатов пользователя с количеством непрочитанных сообщений.
 router.get('/', async (req, res) => {
   const { rows } = await query(
-    `SELECT c.*, cm.role FROM chats c
+    `SELECT c.*, cm.role,
+       (SELECT count(*)::int FROM messages m
+        WHERE m.chat_id = c.id AND m.deleted = FALSE AND m.sender_id != $1
+          AND m.scheduled_at IS NULL
+          AND m.id > COALESCE(mr.last_read_message_id, 0)) AS unread,
+       (SELECT m2.text FROM messages m2
+        WHERE m2.chat_id = c.id AND m2.deleted = FALSE
+          AND (m2.scheduled_at IS NULL OR m2.scheduled_at <= now())
+        ORDER BY m2.id DESC LIMIT 1) AS last_message,
+       (SELECT max(m3.created_at) FROM messages m3
+        WHERE m3.chat_id = c.id AND m3.deleted = FALSE
+          AND (m3.scheduled_at IS NULL OR m3.scheduled_at <= now())) AS last_activity
+     FROM chats c
      JOIN chat_members cm ON cm.chat_id = c.id AND cm.user_id = $1
-     ORDER BY c.created_at DESC`,
+     LEFT JOIN message_reads mr ON mr.chat_id = c.id AND mr.user_id = $1
+     ORDER BY last_activity DESC NULLS LAST`,
     [req.user.id]
   );
   res.json(rows);
@@ -75,6 +89,27 @@ router.post('/:id/members', async (req, res) => {
     `INSERT INTO chat_members (chat_id, user_id, role) VALUES ($1,$2,'member')
      ON CONFLICT DO NOTHING`,
     [req.params.id, req.body.userId]
+  );
+  res.json({ ok: true });
+});
+
+// Отметить чат прочитанным до последнего сообщения.
+router.post('/:id/read', async (req, res) => {
+  const { rows: member } = await query(
+    'SELECT 1 FROM chat_members WHERE chat_id = $1 AND user_id = $2',
+    [req.params.id, req.user.id]
+  );
+  if (!member[0]) return res.status(403).json({ error: 'forbidden' });
+  const { rows: latest } = await query(
+    'SELECT COALESCE(MAX(id), 0) AS mid FROM messages WHERE chat_id = $1 AND deleted = FALSE',
+    [req.params.id]
+  );
+  await query(
+    `INSERT INTO message_reads (chat_id, user_id, last_read_message_id)
+     VALUES ($1,$2,$3)
+     ON CONFLICT (chat_id, user_id)
+     DO UPDATE SET last_read_message_id = GREATEST(message_reads.last_read_message_id, $3)`,
+    [req.params.id, req.user.id, latest[0].mid]
   );
   res.json({ ok: true });
 });
