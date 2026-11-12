@@ -2,11 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, getToken } from '../api.js';
 
+const EMOJI = ['👍', '❤️', '🔥', '😂', '🎉'];
+
 export default function ChatView({ user }) {
   const { id } = useParams();
   const [messages, setMessages] = useState([]);
   const [chatInfo, setChatInfo] = useState(null);
   const [text, setText] = useState('');
+  const [pickerFor, setPickerFor] = useState(null);
   const wsRef = useRef(null);
   const bottomRef = useRef(null);
 
@@ -21,7 +24,7 @@ export default function ChatView({ user }) {
       try {
         const msg = JSON.parse(ev.data);
         if (msg.type === 'message' && msg.chatId === Number(id)) {
-          setMessages((prev) => [...prev, msg.message]);
+          setMessages((prev) => [...prev, { ...msg.message, reactions: [] }]);
         }
       } catch {}
     };
@@ -40,9 +43,25 @@ export default function ChatView({ user }) {
     setText('');
     try {
       const msg = await api(`/messages/${id}`, { method: 'POST', body: JSON.stringify(body) });
-      setMessages((prev) => [...prev, msg]);
+      setMessages((prev) => [...prev, { ...msg, reactions: [] }]);
     } catch {}
   };
+
+  const react = async (messageId, emoji) => {
+    setPickerFor(null);
+    try {
+      const data = await api(`/messages/${messageId}/react`, {
+        method: 'POST',
+        body: JSON.stringify({ emoji })
+      });
+      setMessages((prev) => prev.map((m) =>
+        m.id === data.messageId ? { ...m, reactions: data.reactions } : m
+      ));
+    } catch {}
+  };
+
+  const senderName = (m) =>
+    [m.sender_first_name, m.sender_last_name].filter(Boolean).join(' ') || 'Пользователь';
 
   return (
     <div className="chat-page">
@@ -56,8 +75,30 @@ export default function ChatView({ user }) {
       <div className="messages">
         {messages.map((m) => (
           <div key={m.id} className={m.sender_id === user.id ? 'msg own' : 'msg'}>
+            {chatInfo?.type !== 'private' && m.sender_id !== user.id && (
+              <div className="muted small">{senderName(m)}</div>
+            )}
             <div>{m.text}</div>
-            <div className="muted small">{new Date(m.created_at).toLocaleTimeString()}{m.edited ? ' · изменено' : ''}</div>
+            {m.reactions?.length > 0 && (
+              <div className="reactions">
+                {m.reactions.map((r) => (
+                  <button key={r.emoji} className="reaction-chip" onClick={() => react(m.id, r.emoji)}>
+                    {r.emoji} {r.n}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="msg-footer">
+              <span className="muted small">{new Date(m.created_at).toLocaleTimeString()}{m.edited ? ' · изменено' : ''}</span>
+              <button className="link small" onClick={() => setPickerFor(pickerFor === m.id ? null : m.id)}>☺</button>
+            </div>
+            {pickerFor === m.id && (
+              <div className="emoji-picker">
+                {EMOJI.map((e) => (
+                  <button key={e} className="reaction-chip" onClick={() => react(m.id, e)}>{e}</button>
+                ))}
+              </div>
+            )}
           </div>
         ))}
         <div ref={bottomRef} />
